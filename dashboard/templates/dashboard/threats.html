@@ -1,0 +1,109 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Threats - LoguardLLM{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="color: #333;">Threat Alerts</h1>
+    <a href="{% url 'admin:engine_threatalert_changelist' %}" class="btn btn-secondary">Manage in Admin →</a>
+</div>
+
+<div class="card">
+    <h2>Filters</h2>
+    <form method="get" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Severity</label>
+            <select name="severity" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All</option>
+                {% for value, label in severity_choices %}
+                <option value="{{ value }}" {% if severity_filter == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Type</label>
+            <select name="type" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All</option>
+                {% for value, label in type_choices %}
+                <option value="{{ value }}" {% if type_filter == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Acknowledged</label>
+            <select name="acknowledged" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All</option>
+                <option value="no" {% if acknowledged_filter == 'no' %}selected{% endif %}>Pending</option>
+                <option value="yes" {% if acknowledged_filter == 'yes' %}selected{% endif %}>Acknowledged</option>
+            </select>
+        </div>
+        
+        <div style="display: flex; align-items: flex-end;">
+            <button type="submit" class="btn btn-primary" style="width: 100%; border: none; cursor: pointer;">Apply Filters</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    {% if threats %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Severity</th>
+                <th>Description</th>
+                <th>Confidence</th>
+                <th>Source IPs</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for threat in threats %}
+            <tr>
+                <td style="white-space: nowrap;">{{ threat.timestamp|date:"Y-m-d H:i" }}</td>
+                <td>{{ threat.get_threat_type_display }}</td>
+                <td><span class="badge {{ threat.severity }}">{{ threat.severity|upper }}</span></td>
+                <td>{{ threat.description|truncatewords:20 }}</td>
+                <td style="text-align: right;">{{ threat.confidence|floatformat:2 }}</td>
+                <td style="font-family: monospace; font-size: 0.875rem;">
+                    {% for ip in threat.source_ips|slice:":3" %}
+                        {{ ip }}{% if not forloop.last %}, {% endif %}
+                    {% endfor %}
+                    {% if threat.source_ips|length > 3 %}
+                        <span style="color: #999;">+{{ threat.source_ips|length|add:"-3" }} more</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if threat.acknowledged %}
+                    <span style="color: #28a745;">✓ Ack</span>
+                    {% else %}
+                    <span style="color: #ffc107;">⚠ Pending</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="{% url 'dashboard:threat_detail' threat.id %}" class="btn btn-primary" style="padding: 0.25rem 0.75rem; font-size: 0.875rem;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <div style="margin-top: 1rem; color: #666; font-size: 0.875rem;">
+        Showing {{ threats|length }} threat(s)
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No threats found</p>
+        {% if severity_filter or type_filter or acknowledged_filter %}
+        <p style="font-size: 0.875rem; margin-top: 0.5rem;">Try adjusting your filters</p>
+        {% else %}
+        <p style="font-size: 0.875rem; margin-top: 0.5rem;">Run the analyzer to detect threats</p>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

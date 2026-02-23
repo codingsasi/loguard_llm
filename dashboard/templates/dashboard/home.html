@@ -1,0 +1,180 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Dashboard - LoguardLLM{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem; color: #333;">Dashboard Overview</h1>
+
+<div class="stats-grid">
+    <div class="stat-card critical">
+        <div class="label">Total Threats</div>
+        <div class="value">{{ total_threats }}</div>
+    </div>
+    
+    <div class="stat-card warning">
+        <div class="label">Last 24 Hours</div>
+        <div class="value">{{ recent_threats }}</div>
+    </div>
+    
+    <div class="stat-card info">
+        <div class="label">Unacknowledged</div>
+        <div class="value">{{ unacknowledged }}</div>
+    </div>
+    
+    <div class="stat-card {% if config.enabled %}success{% else %}warning{% endif %}">
+        <div class="label">System Status</div>
+        <div class="value" style="font-size: 1.5rem;">{% if config.enabled %}Active{% else %}Paused{% endif %}</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+    <div class="card">
+        <h2>Threats by Severity</h2>
+        {% if severity_stats %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Severity</th>
+                    <th style="text-align: right;">Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stat in severity_stats %}
+                <tr>
+                    <td><span class="badge {{ stat.severity }}">{{ stat.severity|upper }}</span></td>
+                    <td style="text-align: right; font-weight: 600;">{{ stat.count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No threat data yet</div>
+        {% endif %}
+    </div>
+    
+    <div class="card">
+        <h2>Threats by Type</h2>
+        {% if type_stats %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th style="text-align: right;">Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stat in type_stats %}
+                <tr>
+                    <td>{{ stat.threat_type|title|replace:"_":" " }}</td>
+                    <td style="text-align: right; font-weight: 600;">{{ stat.count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No threat data yet</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Latest Threats</h2>
+    {% if latest_threats %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Severity</th>
+                <th>Description</th>
+                <th>Confidence</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for threat in latest_threats %}
+            <tr>
+                <td style="white-space: nowrap;">{{ threat.timestamp|date:"Y-m-d H:i" }}</td>
+                <td>{{ threat.get_threat_type_display }}</td>
+                <td><span class="badge {{ threat.severity }}">{{ threat.severity|upper }}</span></td>
+                <td>{{ threat.description|truncatewords:15 }}</td>
+                <td style="text-align: right;">{{ threat.confidence|floatformat:2 }}</td>
+                <td>
+                    {% if threat.acknowledged %}
+                    <span style="color: #28a745;">✓ Ack</span>
+                    {% else %}
+                    <span style="color: #ffc107;">⚠ Pending</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <div style="margin-top: 1rem;">
+        <a href="{% url 'dashboard:threats' %}" class="btn btn-primary">View All Threats →</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No threats detected yet</p>
+        <p style="font-size: 0.875rem; margin-top: 0.5rem;">Run the analyzer to start detecting threats</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Recent Analysis Runs</h2>
+    {% if recent_runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Status</th>
+                <th>Logs Analyzed</th>
+                <th>Threats Found</th>
+                <th>Duration</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in recent_runs %}
+            <tr>
+                <td style="white-space: nowrap;">{{ run.timestamp|date:"Y-m-d H:i:s" }}</td>
+                <td><span class="badge {{ run.status }}">{{ run.get_status_display }}</span></td>
+                <td style="text-align: right;">{{ run.logs_analyzed }}</td>
+                <td style="text-align: right; font-weight: 600;">{{ run.threats_found }}</td>
+                <td style="text-align: right;">{{ run.duration_seconds|floatformat:2 }}s</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <div style="margin-top: 1rem;">
+        <a href="{% url 'dashboard:analysis_runs' %}" class="btn btn-secondary">View All Runs →</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No analysis runs yet</p>
+        <p style="font-size: 0.875rem; margin-top: 0.5rem;">Start the analyzer with: <code>python manage.py run_analyzer</code></p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card" style="background: #f8f9fa; border-left: 4px solid #667eea;">
+    <h2>System Configuration</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <strong>Analysis Interval:</strong> {{ config.analysis_interval_seconds }}s
+        </div>
+        <div>
+            <strong>Max Logs/Analysis:</strong> {{ config.max_logs_per_analysis }}
+        </div>
+        <div>
+            <strong>LLM Model:</strong> {{ config.llm_model }}
+        </div>
+        <div>
+            <strong>Chunking Strategy:</strong> {{ config.get_chunking_strategy_display }}
+        </div>
+    </div>
+    <div style="margin-top: 1rem;">
+        <a href="{% url 'admin:engine_config_change' config.id %}" class="btn btn-secondary">Edit Configuration →</a>
+    </div>
+</div>
+{% endblock %}
