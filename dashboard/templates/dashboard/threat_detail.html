@@ -1,0 +1,101 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Threat Detail - LoguardLLM{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 1rem;">
+    <a href="{% url 'dashboard:threats' %}" style="color: #667eea; text-decoration: none;">← Back to Threats</a>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1.5rem;">
+        <div>
+            <h1 style="color: #333; margin-bottom: 0.5rem;">{{ threat.get_threat_type_display }}</h1>
+            <div style="color: #666;">{{ threat.timestamp|date:"F d, Y H:i:s" }}</div>
+        </div>
+        <div>
+            <span class="badge {{ threat.severity }}" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                {{ threat.severity|upper }}
+            </span>
+        </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 2rem;">
+        <div>
+            <h3 style="font-size: 0.875rem; color: #666; text-transform: uppercase; margin-bottom: 0.5rem;">Confidence Score</h3>
+            <div style="font-size: 1.5rem; font-weight: 600;">{{ threat.confidence|floatformat:2 }}</div>
+        </div>
+        
+        <div>
+            <h3 style="font-size: 0.875rem; color: #666; text-transform: uppercase; margin-bottom: 0.5rem;">Status</h3>
+            <div style="font-size: 1.5rem; font-weight: 600;">
+                {% if threat.acknowledged %}
+                <span style="color: #28a745;">✓ Acknowledged</span>
+                {% else %}
+                <span style="color: #ffc107;">⚠ Pending Review</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div style="margin-bottom: 2rem;">
+        <h3 style="font-size: 1rem; color: #333; margin-bottom: 0.75rem;">Description</h3>
+        <p style="line-height: 1.8;">{{ threat.description }}</p>
+    </div>
+    
+    <div style="margin-bottom: 2rem;">
+        <h3 style="font-size: 1rem; color: #333; margin-bottom: 0.75rem;">Recommendation</h3>
+        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; border-radius: 4px;">
+            {{ threat.recommendation }}
+        </div>
+    </div>
+    
+    {% if threat.source_ips %}
+    <div style="margin-bottom: 2rem;">
+        <h3 style="font-size: 1rem; color: #333; margin-bottom: 0.75rem;">Source IP Addresses</h3>
+        <div style="font-family: monospace; background: #f8f9fa; padding: 1rem; border-radius: 4px;">
+            {% for ip in threat.source_ips %}
+            <div style="padding: 0.25rem 0;">{{ ip }}</div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if threat.target_paths %}
+    <div style="margin-bottom: 2rem;">
+        <h3 style="font-size: 1rem; color: #333; margin-bottom: 0.75rem;">Targeted Paths</h3>
+        <div style="font-family: monospace; background: #f8f9fa; padding: 1rem; border-radius: 4px;">
+            {% for path in threat.target_paths %}
+            <div style="padding: 0.25rem 0;">{{ path }}</div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <div style="margin-bottom: 2rem;">
+        <h3 style="font-size: 1rem; color: #333; margin-bottom: 0.75rem;">Evidence (Log Entries)</h3>
+        <div style="font-family: monospace; font-size: 0.875rem; background: #2d2d2d; color: #f8f8f2; padding: 1rem; border-radius: 4px; overflow-x: auto;">
+            {% for entry in threat.evidence %}
+            <div style="padding: 0.25rem 0; border-bottom: 1px solid #444;">{{ entry }}</div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <div style="padding-top: 1rem; border-top: 1px solid #dee2e6;">
+        <div style="color: #666; font-size: 0.875rem;">
+            <strong>Analysis Run:</strong> #{{ threat.analysis_run.id }} 
+            ({{ threat.analysis_run.timestamp|date:"Y-m-d H:i:s" }})
+        </div>
+        {% if threat.acknowledged %}
+        <div style="color: #666; font-size: 0.875rem; margin-top: 0.5rem;">
+            <strong>Acknowledged:</strong> {{ threat.acknowledged_at|date:"Y-m-d H:i:s" }}
+            {% if threat.acknowledged_by %}by {{ threat.acknowledged_by }}{% endif %}
+        </div>
+        {% endif %}
+    </div>
+    
+    <div style="margin-top: 1.5rem;">
+        <a href="{% url 'admin:engine_threatalert_change' threat.id %}" class="btn btn-primary">Edit in Admin →</a>
+    </div>
+</div>
+{% endblock %}

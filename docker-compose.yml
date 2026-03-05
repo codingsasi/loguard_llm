@@ -1,0 +1,46 @@
+services:
+  # Ollama with ROCm for AMD GPU
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: loguard_ollama
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    # environment:
+      # - OLLAMA_LLM_LIBRARY=cpu
+      # - HSA_OVERRIDE_GFX_VERSION=11.0.0  # For RX 9070 XT (RDNA 4)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # LoguardLLM Django Application
+  app:
+    build: .
+    container_name: loguard_app
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - chroma_data:/app/chroma_data
+      - ./sample_logs:/app/sample_logs
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DJANGO_SETTINGS_MODULE=loguard.settings
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  chroma_data:

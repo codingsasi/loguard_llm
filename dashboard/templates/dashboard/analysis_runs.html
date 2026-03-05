@@ -1,0 +1,90 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Analysis Runs - LoguardLLM{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem; color: #333;">Analysis Runs</h1>
+
+<div class="stats-grid" style="margin-bottom: 1.5rem;">
+    <div class="stat-card info">
+        <div class="label">Total Runs</div>
+        <div class="value">{{ total_runs }}</div>
+    </div>
+    
+    <div class="stat-card success">
+        <div class="label">Successful</div>
+        <div class="value">{{ successful_runs }}</div>
+    </div>
+    
+    <div class="stat-card critical">
+        <div class="label">Failed</div>
+        <div class="value">{{ failed_runs }}</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="label">Success Rate</div>
+        <div class="value" style="font-size: 1.5rem;">
+            {% if total_runs > 0 %}
+            {{ successful_runs|floatformat:0|add:"0"|mul:100|div:total_runs|floatformat:0 }}%
+            {% else %}
+            N/A
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    {% if runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Timestamp</th>
+                <th>Status</th>
+                <th>Logs Analyzed</th>
+                <th>Threats Found</th>
+                <th>Duration</th>
+                <th>Tokens Used</th>
+                <th>Model</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td><strong>#{{ run.id }}</strong></td>
+                <td style="white-space: nowrap;">{{ run.timestamp|date:"Y-m-d H:i:s" }}</td>
+                <td><span class="badge {{ run.status }}">{{ run.get_status_display }}</span></td>
+                <td style="text-align: right;">{{ run.logs_analyzed }}</td>
+                <td style="text-align: right; font-weight: 600;">
+                    {% if run.threats_found > 0 %}
+                    <span style="color: #dc3545;">{{ run.threats_found }}</span>
+                    {% else %}
+                    <span style="color: #28a745;">0</span>
+                    {% endif %}
+                </td>
+                <td style="text-align: right;">{{ run.duration_seconds|floatformat:2 }}s</td>
+                <td style="text-align: right;">
+                    {% if run.tokens_used %}
+                    {{ run.tokens_used|floatformat:0 }}
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td style="font-size: 0.875rem;">{{ run.llm_model_used|default:"-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No analysis runs yet</p>
+        <p style="font-size: 0.875rem; margin-top: 0.5rem;">Start the analyzer to begin monitoring</p>
+        <div style="margin-top: 1rem;">
+            <code style="background: #f8f9fa; padding: 0.5rem 1rem; border-radius: 4px; display: inline-block;">
+                docker exec -it loguard_app python manage.py run_analyzer
+            </code>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
