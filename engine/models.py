@@ -66,40 +66,46 @@ class Config(models.Model):
         help_text="Comma-separated list of path substrings to exclude (e.g., /nodeviewcount,/api/tracking). Matches if path CONTAINS any of these. Use for legitimate app endpoints."
     )
 
-    # LLM Configuration
+    # LLM Configuration (1 base LLM for threat analysis; see also fast/context embedding models below)
+    # Sizes below match `ollama list` (run `ollama list` to verify)
     llm_model = models.CharField(
         max_length=100,
         default='qwen2.5:14b-instruct',
         choices=[
-            ('mistral:7b-instruct', 'Mistral 7B Instruct (8K context) - 4.4GB ✓'),
-            ('qwen2.5:7b-instruct', 'Qwen 2.5 7B Instruct (32K context) - 4.7GB ✓'),
-            ('llama3.1:8b', 'Llama 3.1 8B Base (128K context) - 4.9GB ✓'),
-            ('qwen2.5:14b-instruct', 'Qwen 2.5 14B Instruct (32K context) - 9.0GB ⭐ ✓'),
-            ('llama3.1:70b-instruct-q4_K_M', 'Llama 3.1 70B Instruct Q4 (128K context) - 42GB ✓'),
+            ('mistral:7b-instruct', 'Mistral 7B Instruct - 4.4 GB'),
+            ('qwen2.5:7b-instruct', 'Qwen 2.5 7B Instruct - 4.7 GB'),
+            ('llama3.1:8b', 'Llama 3.1 8B Base - 4.9 GB'),
+            ('llama3.1:8b-instruct-q8_0', 'Llama 3.1 8B Instruct Q8 - 8.5 GB'),
+            ('codellama:13b', 'Code Llama 13B'),
+            ('qwen2.5:14b-instruct', 'Qwen 2.5 14B Instruct - 9.0 GB'),
+            ('deepseek-r1:14b', 'DeepSeek R1 14B'),
+            ('llama3.1:70b-instruct-q4_K_M', 'Llama 3.1 70B Instruct Q4 - 42 GB'),
+            ('athene-v2:latest', 'Athene v2 - 47 GB'),
         ],
-        help_text="Ollama model name for threat analysis (✓ = pulled and ready)"
+        help_text="Base LLM for threat analysis. System uses 3 models total: 1 base LLM (this) + 2 embedding models (fast + context)."
     )
 
-    # Two-Tier Embedding Configuration
+    # Two-Tier Embedding Configuration (2 embedding models; with llm_model above = 3 models total)
+    # Sizes below match `ollama list` (as of 2025)
     fast_embedding_model = models.CharField(
         max_length=100,
         default='mxbai-embed-large',
         choices=[
-            ('mxbai-embed-large', 'Mxbai Embed Large (1024 dims, fast) - 669MB ⭐ ✓'),
-            ('nomic-embed-text', 'Nomic Embed Text (768 dims) - 274MB ✓'),
-            ('snowflake-arctic-embed:335m', 'Snowflake Arctic (1024 dims) - 669MB ✓'),
+            ('mxbai-embed-large', 'Mxbai Embed Large (1024 dims, fast) - 669 MB ✓'),
+            ('nomic-embed-text', 'Nomic Embed Text (768 dims) - 274 MB ✓'),
+            ('snowflake-arctic-embed:335m', 'Snowflake Arctic (1024 dims) - 669 MB ✓'),
         ],
-        help_text="Fast model for individual logs (✓ = pulled). Use mxbai for best speed."
+        help_text="Fast embedding model for individual logs. (Model 2 of 3: base LLM + this + context.)"
     )
     context_embedding_model = models.CharField(
         max_length=100,
         default='bge-m3',
         choices=[
-            ('bge-m3', 'BGE M3 (1024 dims, 8K context) - 1.2GB ⭐ ✓'),
-            ('nomic-embed-text', 'Nomic Embed Text (768 dims, 2K context) - 274MB ✓'),
-            ('snowflake-arctic-embed2:568m', 'Snowflake Arctic 2 (1024 dims) - 1.2GB ✓'),
+            ('bge-m3', 'BGE M3 (1024 dims, 8K context) - 1.2 GB ✓'),
+            ('nomic-embed-text', 'Nomic Embed Text (768 dims, 2K context) - 274 MB ✓'),
+            ('snowflake-arctic-embed2:568m', 'Snowflake Arctic 2 (1024 dims) - 1.2 GB ✓'),
         ],
-        help_text="Context model for groups/summaries (✓ = pulled). Use bge-m3 for best quality."
+        help_text="Context embedding model for groups/summaries. (Model 3 of 3: base LLM + fast + this.)"
     )
 
     # Buffer Configuration

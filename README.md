@@ -22,6 +22,35 @@ LoguardLLM is an intelligent security monitoring tool that leverages Large Langu
 
 ## Architecture
 
+### Two-step process for log analysis (current, real-time)
+
+Log analysis runs in two steps that repeat continuously:
+
+1. **Step 1 – Ingest & index (per log)**  
+   Each new log line is: parsed → **sentencified** (human-readable key-value) → **embedded with a fast model** (e.g. mxbai) → stored in ChromaDB (`individual_logs`). The same log is appended to an in-memory **buffer**. No LLM call yet; this step is optimized for speed.
+
+2. **Step 2 – Analyze (when buffer is full)**  
+   When the buffer reaches the configured size (e.g. 50 logs):  
+   - Buffer is **flushed** and logs are **grouped** (e.g. by 4xx/5xx and by IP/CIDR).  
+   - **Group summaries** are generated and embedded with a **context model** (e.g. bge-m3) and stored (`log_chunks`).  
+   - **RAG** retrieves recent context from `individual_logs`, `log_chunks`, and `analysis_summaries` (time-windowed).  
+   - The **LLM** is called with the **current batch of raw logs** plus the retrieved context.  
+   - The **analysis summary** is embedded and stored (`analysis_summaries`); **threats** are written to the database.
+
+So: **Step 1** = continuous per-log indexing (fast embed + buffer); **Step 2** = periodic batch analysis (group → RAG → LLM → store results).
+
+### How it was done earlier (batch / legacy, removed)
+
+The old batch mode used a different pipeline:
+
+1. **Indexing (one-shot):**  
+   All logs were **chunked** (e.g. fixed-size or “intelligent” by time/IP/status) into `LogChunk` objects. Each **chunk** (not each log) was embedded with a **single** embedding model and stored in **one** ChromaDB collection. There was no per-log index and no sentencification (chunks used a simple `METHOD path | Status: X | IP: ...` style text).
+
+2. **Analysis (separate run):**  
+   The analyzer **retrieved pre-built chunks** via RAG and passed **only those chunks** to the LLM. There was no “current batch” of raw logs in the prompt, no group summaries, and no stored analysis summaries for follow-up context. You ran “index everything” once, then “analyze” (optionally on a schedule).
+
+So the earlier approach was: **one-time chunk-and-embed**, then **RAG over chunks → LLM**. The current approach is: **continuous per-log indexing + buffer**, then **group → RAG over logs + groups + past summaries → LLM with current raw logs**.
+
 ### Two-Tier Embedding System
 
 ```
@@ -97,17 +126,25 @@ docker compose ps
 
 ### 3. Pull required models (Ollama)
 
-You need **one LLM** for threat analysis and **two embedding models** for the two-tier system:
+The system uses **3 models in total**: **1 base LLM** (threat analysis) + **2 embedding models** (fast tier + context tier).
 
 ```bash
-# LLM for threat analysis (pick one; 7B is faster, 14B is more accurate)
+# 1) Base LLM for threat analysis (pick one; run `ollama list` for sizes)
+docker exec -it loguard_ollama ollama pull mistral:7b-instruct
 docker exec -it loguard_ollama ollama pull qwen2.5:7b-instruct
-# OR
+docker exec -it loguard_ollama ollama pull llama3.1:8b
+docker exec -it loguard_ollama ollama pull llama3.1:8b-instruct-q8_0
+docker exec -it loguard_ollama ollama pull codellama:13b
 docker exec -it loguard_ollama ollama pull qwen2.5:14b-instruct
+docker exec -it loguard_ollama ollama pull deepseek-r1:14b
+docker exec -it loguard_ollama ollama pull llama3.1:70b-instruct-q4_K_M
+docker exec -it loguard_ollama ollama pull athene-v2:latest
 
-# Embedding models (both required for real-time mode)
-docker exec -it loguard_ollama ollama pull mxbai-embed-large   # Fast tier (individual logs)
-docker exec -it loguard_ollama ollama pull bge-m3             # Context tier (groups/summaries)
+# 2) Fast embedding model (individual logs)
+docker exec -it loguard_ollama ollama pull mxbai-embed-large                         # 669 MB
+
+# 3) Context embedding model (groups/summaries)
+docker exec -it loguard_ollama ollama pull bge-m3                                    # 1.2 GB
 ```
 
 Verify models:
@@ -128,9 +165,9 @@ docker exec -it loguard_app python manage.py createsuperuser
 
 Follow the prompts to set username, email, and password.
 
-### 5. (Optional) Apply recommended filters and reset state
+### 5. (Optional) Clear old data (runs, threats, ChromaDB)
 
-To set smart filtering (excluded paths, status codes, methods) and clear old data:
+To wipe analysis runs, threat alerts, and embeddings (config is left unchanged):
 
 ```bash
 docker exec loguard_app python reset_and_configure.py
@@ -186,17 +223,21 @@ Edit the configuration via Django admin at **http://localhost:8000/admin/engine/
 - **Excluded Methods**: HTTP methods to exclude (e.g. `HEAD,OPTIONS`). Leave empty to include all.
 - **Included Methods Override**: Methods to **always** include even if their status code is excluded (e.g. `POST,PUT,DELETE,PATCH`). Use this to still analyze POST 200 OK for spam/abuse while excluding normal GET 200 traffic.
 
-### LLM Configuration
-- **LLM Model**: Choose from:
-  - `mistral:7b-instruct` (8K context) — fast, good for testing
-  - `qwen2.5:7b-instruct` (32K context) — recommended balance
-  - `llama3.1:8b` (128K context)
-  - `qwen2.5:14b-instruct` (32K context) — more capable
-  - `llama3.1:70b-instruct-q4_K_M` (128K context) — best quality, slower
+### LLM Configuration (1 of 3 models)
+- **Base LLM (threat analysis)** — options (run `ollama list` for sizes):
+  - `mistral:7b-instruct` — 4.4 GB
+  - `qwen2.5:7b-instruct` — 4.7 GB
+  - `llama3.1:8b` — 4.9 GB
+  - `llama3.1:8b-instruct-q8_0` — 8.5 GB
+  - `codellama:13b`
+  - `qwen2.5:14b-instruct` — 9.0 GB
+  - `deepseek-r1:14b`
+  - `llama3.1:70b-instruct-q4_K_M` — 42 GB
+  - `athene-v2:latest` — 47 GB
 
-### Embedding Models (Two-Tier System)
-- **Fast Embedding Model**: `mxbai-embed-large` — embeds individual logs immediately
-- **Context Embedding Model**: `bge-m3` — embeds groups and summaries
+### Embedding Models (2 of 3 models – two-tier)
+- **Fast Embedding Model**: `mxbai-embed-large` — 669 MB; embeds individual logs
+- **Context Embedding Model**: `bge-m3` — 1.2 GB; embeds groups and summaries
 
 ### Buffer & RAG Settings
 - **Buffer Size**: Logs to accumulate before analysis (default: 50)
@@ -228,6 +269,29 @@ The analyzer runs in real-time only. It will:
 11. Auto-cleanup old embeddings (TTL)
 
 Press `Ctrl+C` to stop.
+
+### Understanding the console output
+
+Each time the buffer fills, you see a block like:
+
+```
+Buffer full (200 logs) - starting batch analysis #12...
+  Flushed 200 logs, created 1 group summaries
+  Generated 1 group embeddings
+  Retrieved RAG context: 19 individual, 5 groups, 2 summaries
+  Running LLM analysis...
+  ✓ No threats detected
+Total processed: 2400 logs, 12 batches
+```
+
+- **Buffer full (200 logs)** — The in-memory buffer reached 200 lines (your configured buffer size). Only these 200 logs are analyzed in this batch.
+- **Flushed 200 logs, created 1 group summaries** — The buffer was cleared; the 200 logs were grouped (e.g. by 4xx/5xx and IP) into one or more text summaries.
+- **Generated 1 group embeddings** — Each group summary was embedded with the context model (bge-m3) and stored in ChromaDB.
+- **Retrieved RAG context** — For this batch, RAG pulled recent context: 19 individual log snippets, 5 group summaries, and 2 past analysis summaries from ChromaDB (within the time window). This context is sent to the LLM along with the 200 current logs.
+- **Running LLM analysis** — The LLM (e.g. Mistral, Llama) is called with the 200 logs + RAG context to detect threats.
+- **Total processed: 2400 logs, 12 batches** — **Cumulative totals since startup**: 2400 log lines read from the file so far, and 12 batch analyses run. Each batch still only analyzes 200 logs; the total is a running count, not the size of one request.
+
+So the run is efficient: every batch analyzes only one buffer (e.g. 200 logs). The increasing total is just “how many logs we’ve seen and how many batches we’ve done so far.”
 
 ### View results
 
@@ -275,7 +339,7 @@ loguard_llm/
 
 ### Helper scripts
 
-- **`reset_and_configure.py`** — Clears threats, analysis runs, and embeddings; applies recommended filters (excluded paths, status codes, methods). Run after changing config or to start fresh:
+- **`reset_and_configure.py`** — Clears threat alerts, analysis runs, and ChromaDB embeddings only. Does not change Config (edit filters/LLM in Django admin):
   ```bash
   docker exec loguard_app python reset_and_configure.py
   ```
@@ -284,6 +348,11 @@ loguard_llm/
   docker exec loguard_app python view_threats.py
   ```
 - **`configure_filters.py`** — Applies a predefined filter set (excluded status codes, method overrides) without clearing data.
+- **`inspect_chroma`** (management command) — Show ChromaDB contents (counts and sample documents). Use to verify what is in RAG context (e.g. after a clear, or to see if old excluded paths like `/nodeviewcount` appear):
+  ```bash
+  docker exec loguard_app python manage.py inspect_chroma
+  docker exec loguard_app python manage.py inspect_chroma --samples=10 --check-excluded
+  ```
 
 ## Supported Log Formats
 
@@ -309,7 +378,7 @@ loguard_llm/
 - **GPU Memory**:
   - Mistral 7B: ~4GB VRAM
   - Qwen 2.5 7B: ~5GB VRAM
-  - Llama 3.1 70B (quantized): ~10-12GB VRAM
+  - Llama 3.1 70B (quantized q4): ~40GB+ VRAM (or large RAM if CPU offload)
 
 ### Recommended Settings for Performance
 - **Chunk Size**: 10-20 logs (smaller = faster embeddings)
@@ -338,14 +407,27 @@ If you see `the input length exceeds the context length`:
 2. **Use smaller log file**: Test with `attack_simulation.log` (1000 lines) instead of `access.log` (280k lines)
 3. **Use larger embedding model**: Switch to `bge-m3` (8K context)
 
-### ChromaDB errors
+### ChromaDB errors / stale RAG context
 
-Clear the vector database, then run the analyzer again so it re-populates from the log file:
-```bash
-docker exec loguard_app python reset_and_configure.py
-# or manually: docker exec loguard_app sh -c "rm -rf /app/chroma_data/*"
-docker exec -it loguard_app python manage.py run_analyzer
-```
+If threat alerts show **target paths** like `/nodeviewcount` or `/analytics` even though those paths are in **Excluded paths**, old ChromaDB data may still be in RAG context. Inspect and clear:
+
+1. **Inspect** what is in ChromaDB:
+   ```bash
+   docker exec loguard_app python manage.py inspect_chroma --check-excluded
+   ```
+   Samples that contain excluded-path hints are flagged.
+
+2. **Clear** the vector database and re-run the analyzer:
+   ```bash
+   docker exec loguard_app python reset_and_configure.py
+   docker exec -it loguard_app python manage.py run_analyzer
+   ```
+
+3. If the problem persists (e.g. some Chroma versions leave data after `delete_collection`), do a **force clear** (deletes the ChromaDB data directory and reinitializes):
+   ```bash
+   docker exec loguard_app python reset_and_configure.py --force
+   docker exec -it loguard_app python manage.py run_analyzer
+   ```
 
 ### Slow LLM inference
 
@@ -353,6 +435,24 @@ If analysis is taking too long:
 1. **Use faster model**: Switch to `mistral:7b-instruct` or `qwen2.5:7b-instruct`
 2. **Reduce buffer size**: Set buffer size to 25–30 in Django admin
 3. **Enable static filtering**: Reduces number of logs to analyze by 75%+
+
+### Ollama 500 error (Llama 3.1 70B or other large models)
+
+If you see `500 Internal Server Error` for `http://ollama:11434/api/generate` when using a 70B model:
+
+1. **Check Ollama’s error message** — The app now surfaces Ollama’s response body (e.g. out of memory, context length). Look at the log line after `Ollama generate error:` for the exact reason.
+
+2. **Resource requirements** — Llama 3.1 70B (e.g. `llama3.1:70b-instruct-q4_K_M`) needs ~40GB+ VRAM or substantial RAM if offloaded to CPU. Ensure your host has enough memory and that the Ollama container can use it.
+
+3. **Reduce load** — Lower the **buffer size** in Django admin (e.g. 50–100) so each request sends fewer logs and a shorter prompt.
+
+4. **Check Ollama logs**:
+   ```bash
+   docker logs loguard_ollama
+   ```
+   Look for OOM, CUDA/ROCm errors, or “context length” messages.
+
+5. **Use a smaller model** — If resources are limited, use `llama3.1:8b` or `qwen2.5:7b-instruct` for analysis.
 
 ### Low detection accuracy
 

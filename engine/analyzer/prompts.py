@@ -2,20 +2,20 @@
 Prompt templates for threat detection with LLMs.
 """
 
-SYSTEM_PROMPT = """You are a cybersecurity analyst specializing in web server log analysis. Your task is to identify security threats and anomalies in log data.
-
-You have expertise in:
-- Brute force attacks and authentication failures
-- DDoS and DoS patterns
-- SQL injection attempts
-- Path traversal and directory manipulation
-- Reconnaissance and scanning activities
-- Malicious bot behavior
-
-Analyze the provided logs carefully and identify any security threats."""
+SYSTEM_PROMPT = """Analyze the provided web server logs and identify threats and attack patterns from the logs."""
 
 
-THREAT_ANALYSIS_PROMPT = """Analyze the following web server log entries for security threats.
+THREAT_ANALYSIS_PROMPT = """
+Attack Types:
+brute_force - Logs indicating repeated attempts same path with  different parameters
+ddos - Logs indicating high frequency requests in an extremely short interval (2 second or less)
+sql_injection - Logs indicating SQL injection attempts
+path_traversal - Logs indicating path traversal attempts
+reconnaissance - Logs indicating reconnaissance attempts (e.g. scanning for open ports, directories, files)
+bot - Logs indicating bot activity
+other - Logs indicating other ambiguous but suspicious threats or patterns
+
+It's a threat only if detected with high confidence.
 
 Retrieved Log Chunks:
 {log_chunks}
@@ -56,21 +56,21 @@ Respond ONLY with valid JSON. Do not include any other text."""
 def format_chunks_for_prompt(chunks: list) -> str:
     """
     Format retrieved log chunks for the LLM prompt.
-    
+
     Args:
         chunks: List of chunk dictionaries from retriever
-    
+
     Returns:
         Formatted string for prompt
     """
     if not chunks:
         return "No log entries retrieved."
-    
+
     formatted_lines = []
     for i, chunk in enumerate(chunks, 1):
         metadata = chunk.get('metadata', {})
         document = chunk.get('document', '')
-        
+
         # Add chunk header
         formatted_lines.append(f"\n--- Chunk {i} ---")
         formatted_lines.append(f"Time: {metadata.get('start_time', 'Unknown')} to {metadata.get('end_time', 'Unknown')}")
@@ -79,17 +79,17 @@ def format_chunks_for_prompt(chunks: list) -> str:
         formatted_lines.append(f"Status Codes: {metadata.get('status_codes', {})}")
         formatted_lines.append(f"\nLogs:")
         formatted_lines.append(document)
-    
+
     return "\n".join(formatted_lines)
 
 
 def build_analysis_prompt(chunks: list) -> str:
     """
     Build the complete analysis prompt with chunks.
-    
+
     Args:
         chunks: List of chunk dictionaries from retriever
-    
+
     Returns:
         Complete prompt string
     """

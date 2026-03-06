@@ -137,41 +137,28 @@ class ThreatDetector:
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """
-        Parse JSON response from LLM.
-
-        Args:
-            response: Raw LLM output
-
-        Returns:
-            Dict with 'threats' and 'summary' keys
+        Parse JSON response from LLM. Expects valid JSON only.
+        Invalid or malformed responses are logged and treated as no threats.
         """
+        text = response.strip()
         try:
-            # Try to extract JSON from response
-            # Sometimes LLMs add extra text before/after JSON
-            start_idx = response.find('{')
-            end_idx = response.rfind('}') + 1
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("LLM response not valid JSON (len=%d). Ignoring.", len(text))
+            logger.warning("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
+            return {"threats": [], "summary": "Parse failed (invalid JSON)."}
 
-            if start_idx >= 0 and end_idx > start_idx:
-                json_str = response[start_idx:end_idx]
-                data = json.loads(json_str)
+        if isinstance(data, dict) and "threats" in data:
+            if "summary" not in data or data["summary"] is None:
+                data["summary"] = "Analysis complete."
+            return data
+        if isinstance(data, list):
+            threats = [t for t in data if isinstance(t, dict) and t.get("type")]
+            return {"threats": threats, "summary": "Analysis complete."}
 
-                # Validate structure
-                if 'threats' in data and 'summary' in data:
-                    return data
-
-            logger.warning(f"LLM response not in expected JSON format. Response preview: {response[:200]}")
-            return {
-                'threats': [],
-                'summary': 'Unable to parse LLM response. Raw output: ' + response[:500]
-            }
-
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            logger.debug(f"Failed JSON string: {response[:500]}")
-            return {
-                'threats': [],
-                'summary': f'JSON parsing failed: {str(e)}. Check LLM model compatibility.'
-            }
+        logger.warning("LLM response valid JSON but missing 'threats' (len=%d). Ignoring.", len(text))
+        logger.warning("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
+        return {"threats": [], "summary": "Parse failed (unexpected format)."}
 
     def _calculate_time_window(self, chunks: List[Dict]) -> Dict[str, Optional[datetime]]:
         """Calculate the actual time window of analyzed chunks."""
@@ -235,12 +222,13 @@ class ThreatDetector:
             estimated_tokens = len(prompt.split()) * 1.3
             logger.info(f"Analyzing {len(raw_logs)} raw logs with RAG context. Estimated tokens: {int(estimated_tokens)}")
 
-            # Call LLM
+            # Call LLM (allow enough tokens for full JSON response)
             response = self.llm_client.generate(
                 model=config.llm_model,
                 prompt=prompt,
                 system=SYSTEM_PROMPT,
-                temperature=self.temperature
+                temperature=self.temperature,
+                max_tokens=4096,
             )
 
             # Parse threats
@@ -309,74 +297,34 @@ class ThreatDetector:
         sections.append("Analyze these logs for security threats:\n")
         sections.append("\n".join([log.raw_line for log in raw_logs]))
 
-        prompt = f"""
-You are a cybersecurity analyst. Analyze the web server logs below for security threats.
+        prompt = f"""Analyze the web server logs below for security threats.
 
 {chr(10).join(sections)}
 
-## CRITICAL ANALYSIS RULES:
+Respond ONLY with a single valid JSON object. Do not wrap in markdown (no ```). Output only raw JSON.
+CRITICAL: In JSON, every array element must be a quoted string. Do NOT use unquoted "..." or ellipsis inside arrays. For evidence/target_paths/source_ips either list real items as "item1", "item2" or use one summary string like "Multiple paths from /a to /bz". Invalid: ["/a", "/b", ..., "/bz"]. Valid: ["/a", "/b", "/bz"] or ["Multiple two-letter paths"].
 
-**IP Address Analysis (MOST IMPORTANT):**
-1. Count UNIQUE IP addresses in the logs
-2. If you see MANY DIFFERENT IPs → This is NORMAL TRAFFIC, NOT an attack
-3. If you see the SAME IP repeated MANY times (10+ requests) → Potential attack
-4. ONLY flag as DDoS if ONE IP has excessive requests, not if many different IPs are present
-
-**Examples:**
-✅ ATTACK: IP 192.168.1.100 appears 50 times in 1 minute → DDoS
-✅ ATTACK: IP 10.0.0.5 has 20 failed login attempts → Brute force
-❌ NOT AN ATTACK: 15 different IPs each make 1 request → Normal traffic
-❌ NOT AN ATTACK: Different users hitting /nodeviewcount, /analytics, /api/tracking → Legitimate app
-
-**Legitimate Application Endpoints (DO NOT FLAG):**
-- /nodeviewcount, /updateCounter, /analytics, /api/tracking, /api/metrics
-- Multiple different IPs hitting these = normal application behavior
-
-**Real Threats to Identify:**
-- **Brute force attacks**: SAME IP with repeated 401/403 responses on /login, /admin
-- **DDoS/DoS patterns**: ONE IP with 20+ requests in short time (not distributed IPs!)
-- **SQL injection**: SQL patterns in URLs (UNION, SELECT, DROP, etc.)
-- **Path traversal**: Directory traversal attempts (../, /etc/passwd, ../../../../)
-- **Reconnaissance**: SAME IP probing /admin, /.git, /.env, /phpinfo.php
-- **Suspicious bot activity**: SAME IP with bot-like patterns (rapid scanning)
-
-For EACH real threat detected, provide:
-- type: brute_force | ddos | sql_injection | path_traversal | reconnaissance | bot_activity
-- severity: critical | high | medium | low
-- confidence: 0.0-1.0 (how confident you are this is a REAL threat)
-- description: Brief explanation with IP count evidence
-- evidence: List of specific log line numbers or content
-- recommendation: Specific action to take
-- source_ips: List of ALL attacking IP addresses (must be SAME IP repeated, not different IPs)
-- target_paths: List of URLs/paths targeted
-
-**BEFORE FLAGGING A THREAT:**
-1. Count how many unique IPs are involved
-2. If >5 different IPs → Probably NOT an attack (normal traffic)
-3. If 1-2 IPs repeated many times → Investigate further
-4. Check if path is legitimate app endpoint (/nodeviewcount, /analytics)
-
-Respond ONLY with valid JSON in this exact format:
+Format:
 {{
   "threats": [
     {{
-      "type": "ddos",
-      "severity": "critical",
-      "confidence": 0.95,
-      "description": "IP 192.168.1.100 sent 47 requests in 60 seconds to /api/submit",
-      "evidence": ["Request 1 from 192.168.1.100", "Request 2 from 192.168.1.100", "...47 total from same IP"],
-      "recommendation": "Block IP 192.168.1.100 immediately",
-      "source_ips": ["192.168.1.100"],
-      "target_paths": ["/api/submit"]
+      "type": "<brute_force|ddos|sql_injection|path_traversal|reconnaissance|bot_activity|other>",
+      "severity": "<critical|high|medium|low>",
+      "confidence": <0.0-1.0>,
+      "description": "<concise description>",
+      "evidence": ["<string>", "<string>"],
+      "recommendation": "<remediation>",
+      "source_ips": ["<ip>"],
+      "target_paths": ["<path>", "<path>"]
     }}
   ],
-  "summary": "Overall assessment of log analysis"
+  "summary": "<overall assessment>"
 }}
 
-If NO threats detected (normal traffic), respond:
+If no threats are detected:
 {{
   "threats": [],
-  "summary": "Normal traffic patterns observed. Multiple different IPs accessing legitimate endpoints."
+  "summary": "<brief summary of what was observed>"
 }}
 """
         return prompt

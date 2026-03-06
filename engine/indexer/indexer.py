@@ -2,9 +2,17 @@
 ChromaDB indexer for log chunks.
 Stores embeddings and metadata for RAG retrieval across multiple collections.
 """
+import os
+# Disable Chroma telemetry to avoid "capture() takes 1 positional argument but 3 were given"
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 import chromadb
 from chromadb.config import Settings
 import logging
+
+# Suppress Chroma telemetry errors (PostHog capture() signature mismatch)
+for _name in ("chromadb.telemetry", "chromadb.telemetry.product", "chromadb.telemetry.product.posthog"):
+    logging.getLogger(_name).setLevel(logging.CRITICAL)
 import time
 from typing import List, Optional, Dict
 from pathlib import Path
@@ -263,21 +271,93 @@ class LogIndexer:
             raise
 
     def clear_all(self):
-        """Clear all collections (fresh start)."""
+        """Clear all collections (fresh start). Deletes each collection and recreates empty ones."""
         try:
             for collection_name in ["individual_logs", "log_chunks", "analysis_summaries", "log_chunks_legacy"]:
                 try:
                     self.client.delete_collection(collection_name)
                     logger.info(f"Deleted collection: {collection_name}")
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not delete {collection_name}: {e}")
 
-            # Recreate collections
-            self.__init__()
+            # Recreate empty collections (same client, new empty collections)
+            self.individual_logs = self.client.get_or_create_collection(
+                name="individual_logs",
+                metadata={"hnsw:space": "cosine", "description": "Fast-embedded individual log sentences"}
+            )
+            self.log_chunks = self.client.get_or_create_collection(
+                name="log_chunks",
+                metadata={"hnsw:space": "cosine", "description": "Context-embedded grouped summaries"}
+            )
+            self.analysis_summaries = self.client.get_or_create_collection(
+                name="analysis_summaries",
+                metadata={"hnsw:space": "cosine", "description": "Context-embedded LLM analysis summaries"}
+            )
+            self.collection = self.client.get_or_create_collection(
+                name="log_chunks_legacy",
+                metadata={"hnsw:space": "cosine"}
+            )
             logger.info("Cleared and recreated all collections")
         except Exception as e:
             logger.error(f"Error clearing all collections: {e}")
             raise
+
+    def clear_all_force(self):
+        """
+        Nuclear option: clear all collections, then try to wipe the ChromaDB data
+        directory and reinitialize. If the directory is in use (e.g. analyzer running
+        or this process has the client open), we only clear collections and suggest
+        a manual wipe.
+        """
+        import shutil
+        chroma_path = Path(django_settings.CHROMA_DATA_DIR)
+        # First drop all collections so the client releases what it can
+        self.clear_all()
+        wiped = False
+        if chroma_path.exists():
+            try:
+                # Remove contents only (not the dir), so we don't hit "device busy" on the directory
+                for child in list(chroma_path.iterdir()):
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                wiped = True
+                logger.info(f"Wiped contents of ChromaDB data directory: {chroma_path}")
+            except OSError as e:
+                if e.errno == 16:  # EBUSY, device or resource busy
+                    logger.warning(
+                        "Could not wipe chroma_data (directory in use). Collections were cleared. "
+                        "Stop the analyzer, then run: rm -rf %s and restart for a full wipe.",
+                        chroma_path,
+                    )
+                    # Don't raise: clear_all() already ran, so collections are empty
+                    return False
+                raise
+        if wiped:
+            # New client; Chroma will create new files in the empty directory
+            self.client = chromadb.PersistentClient(
+                path=str(chroma_path),
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
+            self.individual_logs = self.client.get_or_create_collection(
+                name="individual_logs",
+                metadata={"hnsw:space": "cosine", "description": "Fast-embedded individual log sentences"}
+            )
+            self.log_chunks = self.client.get_or_create_collection(
+                name="log_chunks",
+                metadata={"hnsw:space": "cosine", "description": "Context-embedded grouped summaries"}
+            )
+            self.analysis_summaries = self.client.get_or_create_collection(
+                name="analysis_summaries",
+                metadata={"hnsw:space": "cosine", "description": "Context-embedded LLM analysis summaries"}
+            )
+            self.collection = self.client.get_or_create_collection(
+                name="log_chunks_legacy",
+                metadata={"hnsw:space": "cosine"}
+            )
+            logger.info("ChromaDB reinitialized after force clear")
+        return True
 
     def get_chunk(self, chunk_id: str) -> Optional[dict]:
         """

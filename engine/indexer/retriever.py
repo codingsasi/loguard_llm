@@ -59,13 +59,17 @@ class LogRetriever:
         }
         
         try:
+            # Cap n_results to collection size to avoid Chroma "requested results > elements" warnings
+            n_ind_per_query = max(1, min(max_individual // len(semantic_queries), self.indexer.individual_logs.count()))
+            n_grp_per_query = max(1, min(max_groups // len(semantic_queries), self.indexer.log_chunks.count()))
+
             # Retrieve individual sentencified logs
             for query in semantic_queries:
                 try:
                     query_embedding = self.embedder.embed(query)
                     results = self.indexer.individual_logs.query(
                         query_embeddings=[query_embedding],
-                        n_results=max_individual // len(semantic_queries),  # Distribute across queries
+                        n_results=n_ind_per_query,
                         where={"timestamp": {"$gte": cutoff_ts}}
                     )
                     if results['documents'] and len(results['documents']) > 0:
@@ -79,7 +83,7 @@ class LogRetriever:
                     query_embedding = self.embedder.embed(query)
                     results = self.indexer.log_chunks.query(
                         query_embeddings=[query_embedding],
-                        n_results=max_groups // len(semantic_queries),
+                        n_results=n_grp_per_query,
                         where={"timestamp": {"$gte": cutoff_ts}}
                     )
                     if results['documents'] and len(results['documents']) > 0:

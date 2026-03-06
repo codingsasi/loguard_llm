@@ -335,19 +335,32 @@ class Command(BaseCommand):
                 )
 
                 for threat in results['threats']:
-                    # Build evidence with actual log samples matching the threat
+                    # Build evidence from actual logs; derive IPs/paths from logs so
+                    # we never store excluded paths (e.g. /nodeviewcount) from LLM
                     evidence = self._build_realtime_evidence(threat, raw_logs)
+                    # Use only IPs/paths derived from actual logs; never trust LLM placeholders (e.g. 10.10.10.10)
+                    source_ips = evidence.get('derived_source_ips') or []
+                    target_paths = evidence.get('derived_target_paths') or []
+
+                    # Map the LLM's threat type to a known DB choice; preserve
+                    # the original type string in the description if it differs
+                    raw_type = (threat.get('type') or 'other').lower().replace(' ', '_').replace('-', '_')
+                    known_types = {'brute_force', 'ddos', 'sql_injection', 'path_traversal', 'reconnaissance', 'bot', 'other'}
+                    db_type = raw_type if raw_type in known_types else 'other'
+                    description = threat.get('description', '')
+                    if db_type == 'other' and raw_type not in ('other', ''):
+                        description = f"[{raw_type}] {description}"
 
                     ThreatAlert.objects.create(
                         analysis_run=analysis_run,
-                        threat_type=threat.get('type', 'other'),
+                        threat_type=db_type,
                         severity=threat.get('severity', 'medium'),
                         confidence=threat.get('confidence', 0.5),
-                        description=threat.get('description', ''),
+                        description=description,
                         evidence=evidence,
                         recommendation=threat.get('recommendation', ''),
-                        source_ips=threat.get('source_ips', []),
-                        target_paths=threat.get('target_paths', []),
+                        source_ips=source_ips,
+                        target_paths=target_paths,
                     )
 
                 console.print(f"[bold red]  ⚠ {len(results['threats'])} threats detected![/bold red]")
@@ -356,6 +369,7 @@ class Command(BaseCommand):
                 for threat in results['threats']:
                     severity_icon = {'critical': '🔴', 'high': '🔴', 'medium': '🟡', 'low': '🔵'}.get(threat['severity'], '⚪')
                     console.print(f"    {severity_icon} {threat['type']}: {threat['description'][:60]}...")
+                console.print("[dim]  View full details: http://localhost:8000/threats/ or run: python view_threats.py[/dim]")
             else:
                 console.print("[green]  ✓ No threats detected[/green]")
 
@@ -365,63 +379,74 @@ class Command(BaseCommand):
 
     def _build_realtime_evidence(self, threat: dict, raw_logs: list) -> dict:
         """
-        Build evidence dictionary for real-time mode with actual log samples.
-
-        Args:
-            threat: Threat dictionary from LLM
-            raw_logs: List of ParsedLogEntry objects from the buffer
+        Build evidence from actual logs in the buffer. Source IPs and target paths
+        are derived from these logs (not from the LLM) so they never include
+        excluded paths like /nodeviewcount that never made it into the buffer.
 
         Returns:
-            Dict with llm_evidence and sample_logs
+            Dict with llm_evidence, sample_logs, derived_source_ips, derived_target_paths
         """
         evidence = {
             'llm_evidence': threat.get('evidence', []),
-            'sample_logs': []
+            'sample_logs': [],
+            'derived_source_ips': [],
+            'derived_target_paths': [],
         }
 
-        # Extract source IPs and target paths for filtering
+        # Prefer matching by IP only: LLM target_paths often copy prompt examples
+        # (e.g. /nodeviewcount) which are excluded and not in raw_logs
         source_ips = set(threat.get('source_ips', []))
-        target_paths = set(threat.get('target_paths', []))
-
-        # Find relevant logs
-        max_samples = 15  # Show up to 15 sample logs per threat
+        target_paths_from_llm = set(threat.get('target_paths', []))
+        max_samples = 15
         sample_count = 0
 
         for log in raw_logs:
             if sample_count >= max_samples:
                 break
-
-            # Check if log is relevant to this threat
             is_relevant = False
-
-            # Match by IP
             if source_ips and log.client_ip in source_ips:
                 is_relevant = True
-
-            # Match by path
-            if target_paths:
-                log_path = log.path or ''
-                for target_path in target_paths:
-                    if target_path in log_path:
+            elif target_paths_from_llm and log.path:
+                for tp in target_paths_from_llm:
+                    if tp in (log.path or ''):
                         is_relevant = True
                         break
-
-            # If no IPs or paths specified, include all logs
-            if not source_ips and not target_paths:
+            elif not source_ips and not target_paths_from_llm:
                 is_relevant = True
 
             if is_relevant:
-                # Format log entry for display - include full raw line
                 evidence['sample_logs'].append({
                     'timestamp': log.timestamp.isoformat() if log.timestamp else None,
                     'ip': log.client_ip,
                     'method': log.method,
                     'path': log.path,
                     'status': log.status_code,
-                    'user_agent': (log.user_agent or '')[:100],  # Truncate long UAs
+                    'user_agent': (log.user_agent or '')[:100],
                     'referer': log.referer or '',
-                    'raw_line': log.raw_line  # Include full raw log line
+                    'raw_line': log.raw_line,
                 })
                 sample_count += 1
+
+        # Derive IPs and paths from the logs we actually analyzed (no excluded paths)
+        if evidence['sample_logs']:
+            seen_ips = set()
+            seen_paths = set()
+            for s in evidence['sample_logs']:
+                if s.get('ip'):
+                    seen_ips.add(s['ip'])
+                if s.get('path') and s['path'].strip():
+                    seen_paths.add(s['path'].strip())
+            evidence['derived_source_ips'] = sorted(seen_ips)
+            evidence['derived_target_paths'] = sorted(seen_paths)
+
+        # If LLM returned wrong/fake IPs (e.g. 10.10.10.10) and no logs matched, derive from batch
+        if not evidence['derived_source_ips'] and raw_logs:
+            from collections import Counter
+            ip_counts = Counter(log.client_ip for log in raw_logs if getattr(log, 'client_ip', None))
+            evidence['derived_source_ips'] = [ip for ip, _ in ip_counts.most_common(10)]
+        if not evidence['derived_target_paths'] and raw_logs:
+            from collections import Counter
+            path_counts = Counter(log.path for log in raw_logs if getattr(log, 'path', None) and log.path)
+            evidence['derived_target_paths'] = [p for p, _ in path_counts.most_common(20)]
 
         return evidence

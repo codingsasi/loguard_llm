@@ -14,9 +14,9 @@ def sentencify_log(log: ParsedLogEntry) -> str:
     ```
     GET request
     IP: 165.225.212.252
-    Path: /pwa/phone-home
+    Path: /user/login
     Status: 302 redirect
-    Referrer: /en/service-worker-data
+    Referrer: https://www.google.com
     User-Agent: Chrome (Windows)
     Timestamp: 2026-01-19T01:49:14Z
     ```

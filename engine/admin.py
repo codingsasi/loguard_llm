@@ -170,9 +170,14 @@ class ThreatAlertAdmin(admin.ModelAdmin):
 
         # Handle dict format (new format with LLM evidence + sample logs)
         if isinstance(obj.evidence, dict):
-            # LLM Evidence
             llm_evidence = obj.evidence.get('llm_evidence', [])
-            if llm_evidence:
+            # Only show LLM evidence if it looks substantive (not generic "Request 1 from IP...")
+            if llm_evidence and not all(
+                isinstance(item, str) and (
+                    'Request ' in item and ' from ' in item and ('total from same IP' in item or '...' in item)
+                )
+                for item in llm_evidence
+            ):
                 html.append('<div style="margin-bottom: 15px;">')
                 html.append('<strong style="color: #007bff;">LLM Analysis:</strong>')
                 html.append('<ul style="margin: 5px 0;">')
@@ -181,11 +186,11 @@ class ThreatAlertAdmin(admin.ModelAdmin):
                 html.append('</ul>')
                 html.append('</div>')
 
-            # Sample Logs
             sample_logs = obj.evidence.get('sample_logs', [])
             if sample_logs:
                 html.append('<div>')
                 html.append(f'<strong style="color: #28a745;">Sample Logs ({len(sample_logs)}):</strong>')
+                html.append('<p style="margin: 5px 0 0 0; color: #6c757d; font-size: 12px;">Source IPs and target paths for this alert are derived from these logs (excluded paths do not appear).</p>')
 
                 # Summary table
                 html.append('<table style="width: 100%; margin-top: 10px; border-collapse: collapse; font-family: monospace; font-size: 12px;">')
