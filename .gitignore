@@ -48,7 +48,6 @@ chroma_data/
 .DS_Store
 Thumbs.db
 
-.iii/
 
 # Environment variables
 .env

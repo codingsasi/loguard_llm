@@ -1,7 +1,9 @@
 from django.db import models
 from django.utils import timezone
 
-
+"""
+Created using AI
+"""
 class Config(models.Model):
     """
     System configuration for LoguardLLM.
