@@ -80,6 +80,7 @@ class Config(models.Model):
             ('llama3.1:8b-instruct-q8_0', 'Llama 3.1 8B Instruct Q8 - 8.5 GB'),
             ('codellama:13b', 'Code Llama 13B'),
             ('qwen2.5:14b-instruct', 'Qwen 2.5 14B Instruct - 9.0 GB'),
+            ('qwen2.5:32b-instruct', 'Qwen 2.5 32B Instruct - 20 GB'),
             ('deepseek-r1:14b', 'DeepSeek R1 14B'),
             ('llama3.1:70b-instruct-q4_K_M', 'Llama 3.1 70B Instruct Q4 - 42 GB'),
             ('athene-v2:latest', 'Athene v2 - 47 GB'),

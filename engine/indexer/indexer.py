@@ -8,6 +8,7 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.errors import InvalidCollectionException
 import logging
 
 # Suppress Chroma telemetry errors (PostHog capture() signature mismatch)
@@ -67,6 +68,16 @@ class LogIndexer:
 
         logger.info(f"Initialized ChromaDB with 3 collections: individual_logs, log_chunks, analysis_summaries")
 
+    def _refresh_collection(self, attr_name: str, name: str, description: str):
+        """Re-fetch or recreate a collection whose handle has gone stale."""
+        logger.warning("Collection '%s' handle stale — refreshing.", name)
+        collection = self.client.get_or_create_collection(
+            name=name,
+            metadata={"hnsw:space": "cosine", "description": description}
+        )
+        setattr(self, attr_name, collection)
+        return collection
+
     def index_chunk(self, chunk_id: str, embedding: List[float],
                    document: str, metadata: dict):
         """
@@ -100,20 +111,30 @@ class LogIndexer:
             sentencified_text: Human-readable key-value format text
             metadata: Log metadata (should include timestamp, ip, line_number)
         """
-        try:
-            # Ensure timestamp is present
-            if 'timestamp' not in metadata:
-                metadata['timestamp'] = int(time.time())
+        if 'timestamp' not in metadata:
+            metadata['timestamp'] = int(time.time())
 
-            self.individual_logs.add(
-                ids=[log_id],
-                embeddings=[embedding],
-                documents=[sentencified_text],
-                metadatas=[metadata]
-            )
-        except Exception as e:
-            logger.error(f"Error indexing individual log {log_id}: {e}")
-            raise
+        for attempt in range(2):
+            try:
+                self.individual_logs.add(
+                    ids=[log_id],
+                    embeddings=[embedding],
+                    documents=[sentencified_text],
+                    metadatas=[metadata]
+                )
+                return
+            except InvalidCollectionException:
+                if attempt == 0:
+                    self._refresh_collection(
+                        "individual_logs", "individual_logs",
+                        "Fast-embedded individual log sentences"
+                    )
+                else:
+                    logger.error(f"Error indexing individual log {log_id} after refresh.")
+                    raise
+            except Exception as e:
+                logger.error(f"Error indexing individual log {log_id}: {e}")
+                raise
 
     def index_group_summaries(self, summaries: Dict[str, str],
                              embeddings: Dict[str, List[float]], batch_id: str):
@@ -128,30 +149,36 @@ class LogIndexer:
         if not summaries:
             return
 
-        try:
-            ids = [f"{batch_id}_{group_id}" for group_id in summaries.keys()]
-            docs = list(summaries.values())
-            embs = [embeddings[gid] for gid in summaries.keys()]
-            metas = [
-                {
-                    'timestamp': int(time.time()),
-                    'group_id': gid,
-                    'batch_id': batch_id,
-                    'log_count': len([line for line in text.split('\n') if line.strip()])
-                }
-                for gid, text in summaries.items()
-            ]
+        ids = [f"{batch_id}_{group_id}" for group_id in summaries.keys()]
+        docs = list(summaries.values())
+        embs = [embeddings[gid] for gid in summaries.keys()]
+        metas = [
+            {
+                'timestamp': int(time.time()),
+                'group_id': gid,
+                'batch_id': batch_id,
+                'log_count': len([line for line in text.split('\n') if line.strip()])
+            }
+            for gid, text in summaries.items()
+        ]
 
-            self.log_chunks.add(
-                ids=ids,
-                embeddings=embs,
-                documents=docs,
-                metadatas=metas
-            )
-            logger.info(f"Indexed {len(ids)} group summaries for batch {batch_id}")
-        except Exception as e:
-            logger.error(f"Error indexing group summaries: {e}")
-            raise
+        for attempt in range(2):
+            try:
+                self.log_chunks.add(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+                logger.info(f"Indexed {len(ids)} group summaries for batch {batch_id}")
+                return
+            except InvalidCollectionException:
+                if attempt == 0:
+                    self._refresh_collection(
+                        "log_chunks", "log_chunks",
+                        "Context-embedded grouped summaries"
+                    )
+                else:
+                    logger.error(f"Error indexing group summaries after refresh.")
+                    raise
+            except Exception as e:
+                logger.error(f"Error indexing group summaries: {e}")
+                raise
 
     def index_analysis_summary(self, summary_id: str, embedding: List[float],
                               summary_text: str, metadata: dict):
@@ -164,21 +191,31 @@ class LogIndexer:
             summary_text: LLM-generated analysis summary
             metadata: Should include timestamp, threats_found, batch_id
         """
-        try:
-            # Ensure timestamp is present
-            if 'timestamp' not in metadata:
-                metadata['timestamp'] = int(time.time())
+        if 'timestamp' not in metadata:
+            metadata['timestamp'] = int(time.time())
 
-            self.analysis_summaries.add(
-                ids=[summary_id],
-                embeddings=[embedding],
-                documents=[summary_text],
-                metadatas=[metadata]
-            )
-            logger.info(f"Indexed analysis summary {summary_id}")
-        except Exception as e:
-            logger.error(f"Error indexing analysis summary {summary_id}: {e}")
-            raise
+        for attempt in range(2):
+            try:
+                self.analysis_summaries.add(
+                    ids=[summary_id],
+                    embeddings=[embedding],
+                    documents=[summary_text],
+                    metadatas=[metadata]
+                )
+                logger.info(f"Indexed analysis summary {summary_id}")
+                return
+            except InvalidCollectionException:
+                if attempt == 0:
+                    self._refresh_collection(
+                        "analysis_summaries", "analysis_summaries",
+                        "Context-embedded LLM analysis summaries"
+                    )
+                else:
+                    logger.error(f"Error indexing analysis summary {summary_id} after refresh.")
+                    raise
+            except Exception as e:
+                logger.error(f"Error indexing analysis summary {summary_id}: {e}")
+                raise
 
     def cleanup_old_entries(self, collection_name: str, max_age_seconds: int):
         """

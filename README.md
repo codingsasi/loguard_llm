@@ -136,6 +136,7 @@ docker exec -it loguard_ollama ollama pull llama3.1:8b
 docker exec -it loguard_ollama ollama pull llama3.1:8b-instruct-q8_0
 docker exec -it loguard_ollama ollama pull codellama:13b
 docker exec -it loguard_ollama ollama pull qwen2.5:14b-instruct
+docker exec -it loguard_ollama ollama pull qwen2.5:32b-instruct
 docker exec -it loguard_ollama ollama pull deepseek-r1:14b
 docker exec -it loguard_ollama ollama pull llama3.1:70b-instruct-q4_K_M
 docker exec -it loguard_ollama ollama pull athene-v2:latest
@@ -231,6 +232,7 @@ Edit the configuration via Django admin at **http://localhost:8000/admin/engine/
   - `llama3.1:8b-instruct-q8_0` — 8.5 GB
   - `codellama:13b`
   - `qwen2.5:14b-instruct` — 9.0 GB
+  - `qwen2.5:32b-instruct` — 20 GB
   - `deepseek-r1:14b`
   - `llama3.1:70b-instruct-q4_K_M` — 42 GB
   - `athene-v2:latest` — 47 GB
