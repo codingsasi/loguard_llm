@@ -137,15 +137,20 @@ class ThreatDetector:
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """
-        Parse JSON response from LLM. Expects valid JSON only.
+        Parse JSON response from LLM. Strips markdown code fences if present.
         Invalid or malformed responses are logged and treated as no threats.
         """
+        import re
         text = response.strip()
+        # Strip markdown code fences: ```json ... ``` or ``` ... ```
+        fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        if fence_match:
+            text = fence_match.group(1).strip()
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("LLM response not valid JSON (len=%d). Ignoring.", len(text))
-            logger.warning("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
+            logger.error("LLM response not valid JSON (len=%d). Ignoring.", len(text))
+            logger.error("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
             return {"threats": [], "summary": "Parse failed (invalid JSON)."}
 
         if isinstance(data, dict) and "threats" in data:
@@ -156,8 +161,8 @@ class ThreatDetector:
             threats = [t for t in data if isinstance(t, dict) and t.get("type")]
             return {"threats": threats, "summary": "Analysis complete."}
 
-        logger.warning("LLM response valid JSON but missing 'threats' (len=%d). Ignoring.", len(text))
-        logger.warning("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
+        logger.error("LLM response valid JSON but missing 'threats' (len=%d). Ignoring.", len(text))
+        logger.error("--- BEGIN FULL LLM RESPONSE ---\n%s\n--- END FULL LLM RESPONSE ---", text)
         return {"threats": [], "summary": "Parse failed (unexpected format)."}
 
     def _calculate_time_window(self, chunks: List[Dict]) -> Dict[str, Optional[datetime]]:
