@@ -40,6 +40,24 @@ services:
       - ollama
     restart: unless-stopped
 
+  # Real-time Log Analyzer
+  analyzer:
+    build: .
+    container_name: loguard_analyzer
+    command: python manage.py run_analyzer
+    volumes:
+      - .:/app
+      - chroma_data:/app/chroma_data
+      - ./sample_logs:/app/sample_logs
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DJANGO_SETTINGS_MODULE=loguard.settings
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - ollama
+      - app
+    restart: unless-stopped
+
 volumes:
   ollama_data:
   chroma_data:
